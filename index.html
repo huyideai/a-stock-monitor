@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A股自动盯盘</title>
+  <script>
+    (() => {
+      const target = new URL('stock-monitor.html', location.href);
+      target.search = '?v=' + Date.now() + (location.search ? '&' + location.search.slice(1) : '');
+      target.hash = location.hash;
+      location.replace(target.href);
+    })();
+  </script>
+</head>
+<body>
+  <p>正在打开 A股自动盯盘…</p>
+  <p><a href="stock-monitor.html">无法自动跳转时，请点击这里</a></p>
+</body>
+</html>
