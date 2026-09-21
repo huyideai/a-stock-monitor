@@ -243,10 +243,13 @@ button.mini{padding:3px 9px;font-size:12px}
   <span class="fl-tabs" id="flowKind">
     <button class="fl-tab on" data-kind="ind">行业</button>
     <button class="fl-tab" data-kind="con">概念</button>
+    <button class="fl-tab" data-kind="stock">个股</button>
   </span>
   <span class="fl-tabs" id="flowSort">
     <button class="fl-tab on" data-sort="amt">净额</button>
     <button class="fl-tab" data-sort="pct">占比</button>
+    <button class="fl-tab" data-sort="day" style="display:none">日榜</button>
+    <button class="fl-tab" data-sort="week" style="display:none">周榜</button>
   </span>
   <span class="fl-nm" id="flowLabel">主力净流入</span>
   <span id="flowChips"><span class="fl-chip">资金流数据获取中…</span></span>
@@ -390,7 +393,7 @@ const state = {
   screening:false, emHost:null,
   auction:{ samples:new Map(), running:false, timer:null, final:null, finalAt:0, est:null, auto:true,
     boards:null, concepts:null, liveResonant:null },
-  mkt:{ idx:null, idxAt:0, daily:null, dailyAt:0, hist:null, flow:null, flowKind:'ind', flowSort:'amt', loading:false },
+  mkt:{ idx:null, idxAt:0, daily:null, dailyAt:0, hist:null, flow:null, flowKind:'ind', flowSort:'amt', flowSpan:'day', loading:false },
   groups:['默认'], curGroup:'全部'
 };
 const rowMap = new Map();
@@ -411,8 +414,9 @@ function loadState(){
       if(c.intervalMs) state.intervalMs = c.intervalMs;
       if(typeof c.sound==='boolean') state.sound = c.sound;
       if(typeof c.autoAuction==='boolean') state.auction.auto = c.autoAuction;
-      if(c.flowKind === 'ind' || c.flowKind === 'con') state.mkt.flowKind = c.flowKind;
+      if(c.flowKind === 'ind' || c.flowKind === 'con' || c.flowKind === 'stock') state.mkt.flowKind = c.flowKind;
       if(c.flowSort === 'amt' || c.flowSort === 'pct') state.mkt.flowSort = c.flowSort;
+      if(c.flowSpan === 'day' || c.flowSpan === 'week') state.mkt.flowSpan = c.flowSpan;
       if(c.curGroup && (c.curGroup === '全部' || state.groups.includes(c.curGroup))) state.curGroup = c.curGroup;
     }
   }catch(e){ state.list = DEFAULTS.map(x=>({...x})); }
@@ -422,7 +426,7 @@ function loadState(){
 }
 function saveWatch(){ try{ localStorage.setItem(LS.watch, JSON.stringify(state.list)); }catch(e){} }
 function saveAlerts(){ try{ localStorage.setItem(LS.alerts, JSON.stringify(state.alerts)); }catch(e){} }
-function saveCfg(){ try{ localStorage.setItem(LS.cfg, JSON.stringify({intervalMs:state.intervalMs, sound:state.sound, autoAuction:state.auction.auto, flowKind:state.mkt.flowKind, flowSort:state.mkt.flowSort, curGroup:state.curGroup})); }catch(e){} }
+function saveCfg(){ try{ localStorage.setItem(LS.cfg, JSON.stringify({intervalMs:state.intervalMs, sound:state.sound, autoAuction:state.auction.auto, flowKind:state.mkt.flowKind, flowSort:state.mkt.flowSort, flowSpan:state.mkt.flowSpan, curGroup:state.curGroup})); }catch(e){} }
 
 /* ================= 数据加载（JSONP） ================= */
 function loadScript(url, charset, timeout){
@@ -2283,11 +2287,21 @@ async function fetchFlowList(fs, fid){
   return (arr || []).filter(x => x && x.f14 && isFinite(+x.f62)).slice(0, 6)
     .map(x => ({ name: String(x.f14), amt: +x.f62, pct: +x.f184 }));
 }
+/* 个股资金流榜：日榜 f62（今日主力净额）/ 周榜 f164（5日主力净额），前 10 */
+async function fetchStockFlow(span){
+  const fid = span === 'week' ? 'f164' : 'f62';
+  const pctF = span === 'week' ? 'f165' : 'f184';
+  const arr = await emClist(EM_STOCK_FS, fid, 10, 'f12,f14,f2,f3,' + fid + ',' + pctF);
+  return (arr || []).filter(x => x && x.f14 && x.f12 && isFinite(+x[fid])).slice(0, 10)
+    .map(x => ({ code: String(x.f12), name: String(x.f14), chg: +x.f3, price: +x.f2, amt: +x[fid], pct: +x[pctF] }));
+}
 async function mktFlow(){
   const m = state.mkt;
   const jobs = [];
   for(const kind of ['ind', 'con']) for(const sort of ['amt', 'pct'])
     jobs.push([kind, sort, fetchFlowList(FLOW_FS[kind], sort === 'pct' ? 'f184' : 'f62').catch(() => null)]);
+  for(const span of ['day', 'week'])
+    jobs.push(['stock', span, fetchStockFlow(span).catch(() => null)]);
   const res = await Promise.all(jobs.map(j => j[2]));
   res.forEach((list, i) => {
     if(!list || !list.length) return;
@@ -2306,12 +2320,30 @@ function fmtPctFlow(v){
   if(!isFinite(v)) return '--';
   return (v > 0 ? '+' : '') + v.toFixed(1) + '%';
 }
+function renderFlowStocks(box){
+  const m = state.mkt, span = m.flowSpan || 'day';
+  $('#flowLabel').textContent = span === 'day' ? '个股今日主力净流入前10' : '个股5日主力净流入前10';
+  const arr = m.flow && m.flow.stock && m.flow.stock[span];
+  if(!arr || !arr.length){
+    box.innerHTML = '<span class="fl-chip">资金流数据获取中…</span>';
+    return;
+  }
+  box.innerHTML = arr.map((x, i) => '<span class="fl-chip ' + (x.amt >= 0 ? 'up' : 'down') + (i === 0 ? ' top' : '') + '"' +
+    ' title="' + x.code.toUpperCase() + ' 涨跌 ' + fmtPct(x.chg) + ' · 主力净额 ' + fmtFlow(x.amt) + ' · 净占比 ' + fmtPctFlow(x.pct) + '">' +
+    (i + 1) + ' ' + x.name + ' ' + fmtFlow(x.amt) + '</span>').join('');
+}
 function renderFlowBar(){
   const m = state.mkt;
   const box = $('#flowChips');
-  const kind = m.flowKind || 'ind', sort = m.flowSort || 'amt';
+  const kind = m.flowKind || 'ind', sort = m.flowSort || 'amt', span = m.flowSpan || 'day';
+  const isStock = kind === 'stock';
   document.querySelectorAll('#flowKind .fl-tab').forEach(b => b.classList.toggle('on', b.dataset.kind === kind));
-  document.querySelectorAll('#flowSort .fl-tab').forEach(b => b.classList.toggle('on', b.dataset.sort === sort));
+  document.querySelectorAll('#flowSort .fl-tab').forEach(b => {
+    const spanTab = b.dataset.sort === 'day' || b.dataset.sort === 'week';
+    b.style.display = spanTab === isStock ? '' : 'none';
+    b.classList.toggle('on', spanTab ? b.dataset.sort === span : b.dataset.sort === sort);
+  });
+  if(isStock){ renderFlowStocks(box); return; }
   const arr = m.flow && m.flow[kind] && m.flow[kind][sort];
   if(!arr || !arr.length){
     box.innerHTML = '<span class="fl-chip">资金流数据获取中…</span>';
@@ -2334,8 +2366,15 @@ $('#flowKind').addEventListener('click', e => {
 });
 $('#flowSort').addEventListener('click', e => {
   const b = e.target.closest('.fl-tab');
-  if(!b || !b.dataset.sort || b.dataset.sort === state.mkt.flowSort) return;
-  state.mkt.flowSort = b.dataset.sort;
+  if(!b || !b.dataset.sort) return;
+  const v = b.dataset.sort;
+  if(v === 'day' || v === 'week'){
+    if(state.mkt.flowSpan === v) return;
+    state.mkt.flowSpan = v;
+  }else{
+    if(state.mkt.flowSort === v) return;
+    state.mkt.flowSort = v;
+  }
   saveCfg();
   renderFlowBar();
 });
