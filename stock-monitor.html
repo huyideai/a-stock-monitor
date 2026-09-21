@@ -105,6 +105,28 @@ td.price{font-weight:700;font-size:13.5px}
 .ops button.del{opacity:0}
 tr:hover .ops button.del{opacity:1}
 .ops button.del:hover{color:var(--up)}
+.ops button.grpmv{opacity:0}
+tr:hover .ops button.grpmv{opacity:1}
+/* ---------- 自选分类 ---------- */
+.grp-bar{display:flex;align-items:center;gap:6px;padding:6px 12px;border-bottom:1px solid #1b232e;background:#131a23;flex-wrap:wrap}
+.grp-tab{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:#9fb6d6;background:#182539;border:1px solid #27405f;border-radius:5px;padding:1px 8px;line-height:19px;cursor:pointer;user-select:none}
+.grp-tab:hover{color:#cfe0f5;border-color:#33507a}
+.grp-tab.on{color:#cfe0ff;background:#16233a;border-color:#2f6bd0}
+.grp-tab.on .grp-n{color:#8fb4e8}
+.grp-n{font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.grp-x{color:var(--muted);font-size:11px;line-height:1;padding:0 1px;opacity:0}
+.grp-tab:hover .grp-x{opacity:1}
+.grp-x:hover{color:var(--up)}
+.grp-add{font-size:13px;color:var(--muted);border:1px dashed #334154;border-radius:5px;padding:0 8px;line-height:19px;cursor:pointer;user-select:none}
+.grp-add:hover{color:#cfe0f5;border-color:#33507a}
+.grp-input{width:80px;padding:1px 6px;font-size:11.5px;line-height:17px;border-radius:5px;background:#0d1319;border:1px solid #33507a;color:var(--text);outline:none}
+#grpPop{position:fixed;z-index:85;display:none;width:178px;padding:6px;background:#182130;border:1px solid #2c3a4d;border-radius:9px;box-shadow:0 14px 32px rgba(0,0,0,.5)}
+.gp-title{font-size:11px;color:var(--muted);padding:3px 8px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gp-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;border-radius:6px;font-size:12px;color:#c8d4e4;cursor:pointer;white-space:nowrap}
+.gp-item:hover{background:#263549}
+.gp-item.cur{color:#8fb4e8}
+.gp-new{display:flex;align-items:center;gap:6px;margin-top:4px;padding:6px 9px 4px;border-top:1px solid #232c38;font-size:12px;color:#9fb6d6;cursor:pointer;white-space:nowrap}
+.gp-new:hover{color:#cfe0f5}
 @keyframes flUp{0%{background:rgba(255,77,94,.38)}100%{background:transparent}}
 @keyframes flDown{0%{background:rgba(14,203,129,.34)}100%{background:transparent}}
 td.fl-up{animation:flUp .7s ease-out}
@@ -234,10 +256,11 @@ button.mini{padding:3px 9px;font-size:12px}
   <section class="panel">
     <div class="panel-hd">
       <span class="ph-title">自选列表（<span id="wlCount">0</span>）</span>
-      <span class="muted" style="font-size:11.5px">点击行看图表 · 🔔 设预警 · 悬停行尾删除</span>
+      <span class="muted" style="font-size:11.5px">点击行看图表 · 🔔 预警 · ⇄ 分类 · 悬停删除</span>
       <span class="spacer"></span>
       <span class="countdown" id="countdown">--</span>
     </div>
+    <div class="grp-bar" id="grpBar"></div>
     <div class="tbl-wrap">
       <table>
         <thead><tr>
@@ -325,6 +348,10 @@ button.mini{padding:3px 9px;font-size:12px}
     <button class="mini primary" id="apSave">保存</button>
   </div>
 </div>
+<div id="grpPop">
+  <div class="gp-title" id="gpTitle">移动到分类</div>
+  <div id="gpList"></div>
+</div>
 <div id="toasts"></div>
 
 <script>
@@ -339,7 +366,7 @@ const DEFAULTS = [
   { code:'sz000001', name:'平安银行', base:11.70 },
   { code:'sz000858', name:'五粮液',   base:130.00 }
 ];
-const LS = { watch:'astock.watch.v1', alerts:'astock.alerts.v1', cfg:'astock.cfg.v1' };
+const LS = { watch:'astock.watch.v1', alerts:'astock.alerts.v1', cfg:'astock.cfg.v1', groups:'astock.groups.v1' };
 const fmt2  = v => (v===0||v) && isFinite(v) ? v.toFixed(2) : '--';
 const fmtPct = v => (v===0||v) && isFinite(v) ? (v>0?'+':'') + v.toFixed(2) + '%' : '--';
 const fmtChg = v => (v===0||v) && isFinite(v) ? (v>0?'+':'') + v.toFixed(2) : '--';
@@ -363,7 +390,8 @@ const state = {
   screening:false, emHost:null,
   auction:{ samples:new Map(), running:false, timer:null, final:null, finalAt:0, est:null, auto:true,
     boards:null, concepts:null, liveResonant:null },
-  mkt:{ idx:null, idxAt:0, daily:null, dailyAt:0, hist:null, flow:null, flowKind:'ind', flowSort:'amt', loading:false }
+  mkt:{ idx:null, idxAt:0, daily:null, dailyAt:0, hist:null, flow:null, flowKind:'ind', flowSort:'amt', loading:false },
+  groups:['默认'], curGroup:'全部'
 };
 const rowMap = new Map();
 let timer = null;
@@ -375,6 +403,9 @@ function loadState(){
     state.list = Array.isArray(w) && w.length ? w : DEFAULTS.map(x=>({...x}));
     const a = JSON.parse(localStorage.getItem(LS.alerts) || 'null');
     if(a && typeof a==='object') state.alerts = a;
+    const g = JSON.parse(localStorage.getItem(LS.groups) || 'null');
+    if(Array.isArray(g)) state.groups = g.filter(x => typeof x === 'string' && x.trim()).map(x => x.trim()).slice(0, 20);
+    if(!state.groups.includes('默认')) state.groups.unshift('默认');
     const c = JSON.parse(localStorage.getItem(LS.cfg) || 'null');
     if(c){
       if(c.intervalMs) state.intervalMs = c.intervalMs;
@@ -382,14 +413,16 @@ function loadState(){
       if(typeof c.autoAuction==='boolean') state.auction.auto = c.autoAuction;
       if(c.flowKind === 'ind' || c.flowKind === 'con') state.mkt.flowKind = c.flowKind;
       if(c.flowSort === 'amt' || c.flowSort === 'pct') state.mkt.flowSort = c.flowSort;
+      if(c.curGroup && (c.curGroup === '全部' || state.groups.includes(c.curGroup))) state.curGroup = c.curGroup;
     }
   }catch(e){ state.list = DEFAULTS.map(x=>({...x})); }
   if(!state.list.length) state.list = DEFAULTS.map(x=>({...x}));
+  state.list.forEach(it => { if(typeof it.group !== 'string' || !state.groups.includes(it.group)) it.group = '默认'; });
   state.selected = state.list[0].code;
 }
 function saveWatch(){ try{ localStorage.setItem(LS.watch, JSON.stringify(state.list)); }catch(e){} }
 function saveAlerts(){ try{ localStorage.setItem(LS.alerts, JSON.stringify(state.alerts)); }catch(e){} }
-function saveCfg(){ try{ localStorage.setItem(LS.cfg, JSON.stringify({intervalMs:state.intervalMs, sound:state.sound, autoAuction:state.auction.auto, flowKind:state.mkt.flowKind, flowSort:state.mkt.flowSort})); }catch(e){} }
+function saveCfg(){ try{ localStorage.setItem(LS.cfg, JSON.stringify({intervalMs:state.intervalMs, sound:state.sound, autoAuction:state.auction.auto, flowKind:state.mkt.flowKind, flowSort:state.mkt.flowSort, curGroup:state.curGroup})); }catch(e){} }
 
 /* ================= 数据加载（JSONP） ================= */
 function loadScript(url, charset, timeout){
@@ -499,10 +532,11 @@ function createRow(item){
     '<td class="price"></td><td class="pct"></td><td class="chg"></td>' +
     '<td class="open"></td><td class="prev"></td><td class="high"></td><td class="low"></td>' +
     '<td class="amt"></td><td class="time"></td>' +
-    '<td class="ops"><button class="bell" title="预警设置">🔔</button><button class="del" title="移出自选">✕</button></td>';
+    '<td class="ops"><button class="bell" title="预警设置">🔔</button><button class="grpmv" title="移动到分类">⇄</button><button class="del" title="移出自选">✕</button></td>';
   tr.addEventListener('click', ev => {
     if(ev.target.closest('.del')){ removeStock(item.code); return; }
     if(ev.target.closest('.bell')){ openAlertPop(item.code, ev.target.closest('.bell')); return; }
+    if(ev.target.closest('.grpmv')){ openGroupPop(item.code, ev.target.closest('.grpmv')); return; }
     selectStock(item.code);
   });
   return {
@@ -551,25 +585,30 @@ function updateRow(row, item){
 }
 
 function renderTable(){
+  renderGroups();
   const tbody = $('#tbody');
-  const codes = state.list.map(x => x.code);
+  const view = state.curGroup === '全部' ? state.list : state.list.filter(x => x.group === state.curGroup);
+  const codes = view.map(x => x.code);
   for(const [code, row] of [...rowMap]){
     if(!codes.includes(code)){ row.tr.remove(); rowMap.delete(code); }
   }
   const emptyRow = tbody.querySelector('.empty-tip');
   if(emptyRow) emptyRow.parentElement.remove();
-  if(!state.list.length){
-    tbody.innerHTML = '<tr><td class="empty-tip" colspan="11">自选列表为空，请在右上角添加股票代码</td></tr>';
+  if(!view.length){
+    tbody.innerHTML = '<tr><td class="empty-tip" colspan="11">' +
+      (state.list.length ? '「' + escHtml(state.curGroup) + '」分类暂无股票：可在「全部」里点行尾 ⇄ 移入' : '自选列表为空，请在右上角添加股票') +
+      '</td></tr>';
+    $('#wlCount').textContent = '0';
     return;
   }
-  state.list.forEach((item, i) => {
+  view.forEach((item, i) => {
     let row = rowMap.get(item.code);
     if(!row){ row = createRow(item); rowMap.set(item.code, row); }
     const cur = tbody.children[i];
     if(cur !== row.tr) tbody.insertBefore(row.tr, cur || null);
     updateRow(row, item);
   });
-  $('#wlCount').textContent = state.list.length;
+  $('#wlCount').textContent = view.length;
 }
 
 function lookupName(code){
@@ -1647,7 +1686,8 @@ function normalizeCode(input){
 function pushToWatchlist(code, name){
   if(state.list.some(x => x.code === code)) return false;
   const q = state.quotes.get(code);
-  state.list.push({ code, name: name || (q && q.name) || code.toUpperCase(), base: q ? q.price : 10 });
+  state.list.push({ code, name: name || (q && q.name) || code.toUpperCase(), base: q ? q.price : 10,
+    group: state.curGroup === '全部' ? '默认' : state.curGroup });
   saveWatch(); renderTable();
   return true;
 }
@@ -1748,6 +1788,170 @@ function removeStock(code){
   if(state.selected === code) state.selected = state.list.length ? state.list[Math.max(0, idx - 1)].code : null;
   saveWatch(); renderTable(); renderChartHeader(); ensureChartData(); drawChart();
   toast('已移出自选：' + (item.name || item.code), 'ok');
+}
+
+/* ================= 自选分类 ================= */
+const grpPop = $('#grpPop');
+let grpPopCode = null;
+
+function saveGroups(){ try{ localStorage.setItem(LS.groups, JSON.stringify(state.groups)); }catch(e){} }
+function groupCount(name){
+  return name === '全部' ? state.list.length : state.list.filter(x => x.group === name).length;
+}
+function sanitizeGroupName(name){
+  return String(name || '').trim().replace(/\s+/g, ' ').slice(0, 8);
+}
+function renderGroups(){
+  const bar = $('#grpBar');
+  const tab = (name, canDel) =>
+    '<span class="grp-tab' + (name === state.curGroup ? ' on' : '') + '" data-group="' + escHtml(name) + '"' +
+      (canDel ? ' title="点击切换，双击重命名"' : ' title="点击切换"') + '>' +
+      escHtml(name) + '<span class="grp-n">' + groupCount(name) + '</span>' +
+      (canDel ? '<span class="grp-x" data-delgroup="' + escHtml(name) + '" title="删除分类">×</span>' : '') +
+    '</span>';
+  let html = tab('全部', false);
+  for(const g of state.groups) html += tab(g, g !== '默认');
+  html += '<span class="grp-add" id="grpAdd" title="新增分类">+</span>';
+  bar.innerHTML = html;
+}
+function createGroupInput(placeholder){
+  const inp = document.createElement('input');
+  inp.className = 'grp-input';
+  inp.placeholder = placeholder || '分类名…';
+  inp.maxLength = 8;
+  return inp;
+}
+function startAddGroup(){
+  const old = $('#grpInput');
+  if(old){ old.focus(); return; }
+  const add = $('#grpAdd');
+  if(!add) return;
+  const inp = createGroupInput('分类名…');
+  inp.id = 'grpInput';
+  add.replaceWith(inp);
+  inp.focus();
+  let done = false;
+  const finish = ok => { if(done) return; done = true; if(ok) commitAddGroup(inp.value); else renderGroups(); };
+  inp.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if(e.key === 'Enter') finish(true);
+    else if(e.key === 'Escape') finish(false);
+  });
+  inp.addEventListener('blur', () => finish(true));
+}
+function commitAddGroup(raw){
+  const name = sanitizeGroupName(raw);
+  if(!name){ renderGroups(); return; }
+  if(name === '全部'){ toast('「全部」是保留名称', 'err'); renderGroups(); return; }
+  if(state.groups.includes(name)){
+    state.curGroup = name; saveCfg(); renderGroups(); renderTable();
+    toast('已切换到分类：' + name, 'ok');
+    return;
+  }
+  if(state.groups.length >= 12){ toast('分类数量已达上限（12 个）', 'err'); renderGroups(); return; }
+  state.groups.push(name);
+  state.curGroup = name;
+  saveGroups(); saveCfg(); renderGroups(); renderTable();
+  toast('已新增分类：' + name, 'ok');
+}
+function startRenameGroup(name, tabEl){
+  if(name === '默认'){ toast('「默认」分类不支持重命名', 'err'); return; }
+  const inp = createGroupInput(name);
+  inp.value = name;
+  tabEl.textContent = '';
+  tabEl.appendChild(inp);
+  inp.focus(); inp.select();
+  let done = false;
+  const finish = ok => {
+    if(done) return;
+    done = true;
+    const v = sanitizeGroupName(inp.value);
+    if(!ok || !v || v === name){ renderGroups(); return; }
+    if(v === '全部' || state.groups.includes(v)){ toast('分类名不可用：' + v, 'err'); renderGroups(); return; }
+    state.groups = state.groups.map(g => g === name ? v : g);
+    state.list.forEach(it => { if(it.group === name) it.group = v; });
+    if(state.curGroup === name) state.curGroup = v;
+    saveGroups(); saveWatch(); saveCfg(); renderGroups(); renderTable();
+    toast('已重命名为：' + v, 'ok');
+  };
+  inp.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if(e.key === 'Enter') finish(true);
+    else if(e.key === 'Escape') finish(false);
+  });
+  inp.addEventListener('blur', () => finish(true));
+}
+function deleteGroup(name){
+  if(name === '默认') return;
+  const n = groupCount(name);
+  if(!confirm('删除分类「' + name + '」？' + (n ? '\n其中 ' + n + ' 只股票将移回「默认」' : ''))) return;
+  state.groups = state.groups.filter(g => g !== name);
+  state.list.forEach(it => { if(it.group === name) it.group = '默认'; });
+  if(state.curGroup === name) state.curGroup = '默认';
+  saveGroups(); saveWatch(); saveCfg(); renderGroups(); renderTable();
+  toast('已删除分类：' + name, 'ok');
+}
+function openGroupPop(code, anchor){
+  const item = state.list.find(x => x.code === code);
+  if(!item) return;
+  grpPopCode = code;
+  const cur = item.group || '默认';
+  $('#gpTitle').textContent = '移动「' + (lookupName(code) || item.name || code) + '」到';
+  $('#gpList').innerHTML =
+    state.groups.map(g =>
+      '<div class="gp-item' + (g === cur ? ' cur' : '') + '" data-group="' + escHtml(g) + '">' +
+      escHtml(g) + '<span>' + (g === cur ? '✓' : '') + '</span></div>').join('') +
+    '<div class="gp-new" id="gpNew">+ 新建分类并移入…</div>';
+  grpPop.style.display = 'block';
+  const r = anchor.getBoundingClientRect();
+  const pw = grpPop.offsetWidth, ph = grpPop.offsetHeight;
+  const left = Math.min(r.right - pw, window.innerWidth - pw - 10);
+  let top = r.bottom + 6;
+  if(top + ph > window.innerHeight - 10) top = Math.max(10, r.top - ph - 6);
+  grpPop.style.left = Math.max(10, left) + 'px';
+  grpPop.style.top = top + 'px';
+}
+function closeGroupPop(){ grpPop.style.display = 'none'; grpPopCode = null; }
+function moveStockToGroup(code, group){
+  const item = state.list.find(x => x.code === code);
+  closeGroupPop();
+  if(!item || item.group === group) return;
+  item.group = group;
+  saveWatch(); renderTable();
+  toast('已移入分类：' + group, 'ok');
+}
+function startGroupPopNew(){
+  const box = $('#gpNew');
+  if(!box || box.dataset.editing) return;
+  const code = grpPopCode;
+  box.dataset.editing = '1';
+  box.textContent = '';
+  const inp = createGroupInput('新分类名…');
+  inp.style.width = '104px';
+  box.appendChild(inp);
+  inp.focus();
+  let done = false;
+  const finish = ok => {
+    if(done) return;
+    done = true;
+    const name = sanitizeGroupName(inp.value);
+    if(!ok || !name){ closeGroupPop(); return; }
+    if(name === '全部'){ toast('「全部」是保留名称', 'err'); closeGroupPop(); return; }
+    if(!state.groups.includes(name)){
+      if(state.groups.length >= 12){ toast('分类数量已达上限（12 个）', 'err'); closeGroupPop(); return; }
+      state.groups.push(name); saveGroups();
+    }
+    const item = state.list.find(x => x.code === code);
+    if(item) item.group = name;
+    saveWatch(); saveCfg(); closeGroupPop(); renderTable();
+    toast('已移入分类：' + name, 'ok');
+  };
+  inp.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if(e.key === 'Enter') finish(true);
+    else if(e.key === 'Escape') finish(false);
+  });
+  inp.addEventListener('blur', () => finish(true));
 }
 
 /* ================= 选择 & 数据调度 ================= */
@@ -1945,9 +2149,33 @@ $('#apClear').addEventListener('click', () => {
   ['#apUp','#apDown','#apPctUp','#apPctDown'].forEach(id => $(id).value = '');
   saveAlert();
 });
+/* ---------- 自选分类交互 ---------- */
+$('#grpBar').addEventListener('click', e => {
+  if(e.target.tagName === 'INPUT') return;
+  const x = e.target.closest('.grp-x');
+  if(x){ deleteGroup(x.dataset.delgroup); return; }
+  if(e.target.closest('#grpAdd')){ startAddGroup(); return; }
+  const t = e.target.closest('.grp-tab');
+  if(!t) return;
+  const g = t.dataset.group;
+  if(g === state.curGroup) return;
+  state.curGroup = g;
+  saveCfg(); renderTable();
+});
+$('#grpBar').addEventListener('dblclick', e => {
+  if(e.target.tagName === 'INPUT') return;
+  const t = e.target.closest('.grp-tab');
+  if(t) startRenameGroup(t.dataset.group, t);
+});
+$('#gpList').addEventListener('click', e => {
+  if(e.target.closest('#gpNew')){ startGroupPopNew(); return; }
+  const it = e.target.closest('.gp-item');
+  if(it && grpPopCode) moveStockToGroup(grpPopCode, it.dataset.group);
+});
 document.addEventListener('click', e => {
   if(alertPop.style.display === 'block' && !alertPop.contains(e.target) && !e.target.closest('.bell') && e.target.id !== 'btnAlertForChart') closeAlertPop();
   if(!e.target.closest('.add-wrap')) hideStockSuggest();
+  if(grpPop.style.display === 'block' && !grpPop.contains(e.target) && !e.target.closest('.grpmv')) closeGroupPop();
 });
 document.addEventListener('visibilitychange', () => {
   if(!document.hidden && !state.paused){ tick(); }
