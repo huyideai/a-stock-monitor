@@ -107,6 +107,13 @@ tr:hover .ops button.del{opacity:1}
 .ops button.del:hover{color:var(--up)}
 .ops button.grpmv{opacity:0}
 tr:hover .ops button.grpmv{opacity:1}
+/* ---------- 公式信号徽标（擎/启/破） ---------- */
+.sigs{display:inline-flex;gap:3px;margin-left:4px;vertical-align:1px}
+.sig{font-size:9.5px;line-height:14px;padding:0 4px;border-radius:3px;border:1px solid;font-weight:600;cursor:help;flex:none}
+.sig.vol{color:#f4d97a;border-color:#5c4a1e;background:#2a2313}
+.sig.ma{color:#7fd6a8;border-color:#1d4b34;background:#12271d}
+.sig.brk{color:#8fb4e8;border-color:#27405f;background:#16233a}
+.sig.old{opacity:.62}
 /* ---------- 自选分类 ---------- */
 .grp-bar{display:flex;align-items:center;gap:6px;padding:6px 12px;border-bottom:1px solid #1b232e;background:#131a23;flex-wrap:wrap}
 .grp-tab{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:#9fb6d6;background:#182539;border:1px solid #27405f;border-radius:5px;padding:1px 8px;line-height:19px;cursor:pointer;user-select:none}
@@ -259,7 +266,7 @@ button.mini{padding:3px 9px;font-size:12px}
   <section class="panel">
     <div class="panel-hd">
       <span class="ph-title">自选列表（<span id="wlCount">0</span>）</span>
-      <span class="muted" style="font-size:11.5px">点击行看图表 · 🔔 预警 · ⇄ 分类 · 悬停删除</span>
+      <span class="muted" style="font-size:11.5px">点击行看图表 · 🔔 预警 · ⇄ 分类 · 悬停删除 · 徽标=公式信号</span>
       <span class="spacer"></span>
       <span class="countdown" id="countdown">--</span>
     </div>
@@ -394,7 +401,8 @@ const state = {
   auction:{ samples:new Map(), running:false, timer:null, final:null, finalAt:0, est:null, auto:true,
     boards:null, concepts:null, liveResonant:null },
   mkt:{ idx:null, idxAt:0, daily:null, dailyAt:0, hist:null, flow:null, flowKind:'ind', flowSort:'amt', flowSpan:'day', loading:false },
-  groups:['默认'], curGroup:'全部'
+  groups:['默认'], curGroup:'全部',
+  sigHist:new Map(), sigMap:new Map()
 };
 const rowMap = new Map();
 let timer = null;
@@ -474,6 +482,7 @@ function parseQuote(raw, code){
     change: num(f[31]) || (prevClose ? price - prevClose : 0),
     changePct: num(f[32]) || (prevClose ? (price - prevClose) / prevClose * 100 : 0),
     volume: num(f[6]), amount: num(f[37]) * 10000,
+    floatMcap: num(f[44]),
     time: ts.length >= 14 ? ts.slice(8,10)+':'+ts.slice(10,12)+':'+ts.slice(12,14) : nowTime(),
     ts: Date.now(), sim: false
   };
@@ -532,7 +541,7 @@ function createRow(item){
   const tr = document.createElement('tr');
   tr.dataset.code = item.code;
   tr.innerHTML =
-    '<td class="tl cell-name"><div class="nm"></div><div class="cd"></div></td>' +
+    '<td class="tl cell-name"><div class="nm"><span class="nm-t"></span><span class="sigs"></span></div><div class="cd"></div></td>' +
     '<td class="price"></td><td class="pct"></td><td class="chg"></td>' +
     '<td class="open"></td><td class="prev"></td><td class="high"></td><td class="low"></td>' +
     '<td class="amt"></td><td class="time"></td>' +
@@ -545,18 +554,19 @@ function createRow(item){
   });
   return {
     tr,
-    nm: tr.querySelector('.nm'), cd: tr.querySelector('.cd'),
+    nmT: tr.querySelector('.nm-t'), sigs: tr.querySelector('.sigs'), cd: tr.querySelector('.cd'),
     price: tr.querySelector('.price'), pct: tr.querySelector('.pct'), chg: tr.querySelector('.chg'),
     open: tr.querySelector('.open'), prev: tr.querySelector('.prev'),
     high: tr.querySelector('.high'), low: tr.querySelector('.low'),
     amt: tr.querySelector('.amt'), time: tr.querySelector('.time'),
-    bell: tr.querySelector('.bell'), lastPrice: null
+    bell: tr.querySelector('.bell'), lastPrice: null, sigKey: ''
   };
 }
 
 function updateRow(row, item){
   const q = state.quotes.get(item.code);
-  row.nm.textContent = (q && q.name) || item.name || item.code;
+  row.nmT.textContent = (q && q.name) || item.name || item.code;
+  renderRowSigs(row, item.code);
   row.cd.textContent = item.code;
   const a0 = state.alerts[item.code];
   const fired0 = a0 && a0.trig && (a0.trig.up || a0.trig.down || a0.trig.pctUp || a0.trig.pctDown);
@@ -845,10 +855,29 @@ function drawKline(ctx, W, H){
       ctx.fillText(r.date.slice(5), x, vTop + 9);
     }
   }
+  /* 公式信号标注（擎/启/破） */
+  const sigByDate = sigLookup(code);
+  let sigHit = 0;
+  if(sigByDate){
+    for(let k = 0; k < n; k++){
+      const keys = sigByDate[rows[k].date];
+      if(!keys || !keys.length) continue;
+      sigHit++;
+      const x = padL + step * (k + 0.5);
+      const txt = keys.map(kk => SIG_DEFS[kk].tag).join('');
+      ctx.font = 'bold 9px "Microsoft YaHei",sans-serif';
+      const w = ctx.measureText(txt).width + 6;
+      const y = Math.min(Y(rows[k].low) + 13, padT + chh - 8);
+      ctx.fillStyle = SIG_DEFS[keys[0]].color;
+      ctx.fillRect(x - w / 2, y - 7, w, 14);
+      ctx.fillStyle = '#0b0f14'; ctx.textAlign = 'center';
+      ctx.fillText(txt, x, y + 0.5);
+    }
+  }
   const first = rows[0], last = rows[n-1];
   const chg = (last.close - first.close) / first.close * 100;
   $('#chartLegend').textContent = '最近 ' + n + ' 根日K（前复权） · ' +
-    first.date + ' → ' + last.date + ' · 区间' + fmtPct(chg);
+    first.date + ' → ' + last.date + ' · 区间' + fmtPct(chg) + (sigHit ? ' · 信号：擎=一柱擎天 启=再次启动 破=双突破' : '');
   $('#chartTip').textContent = (data.name || code.toUpperCase()) + ' 日K';
 }
 
@@ -1692,7 +1721,7 @@ function pushToWatchlist(code, name){
   const q = state.quotes.get(code);
   state.list.push({ code, name: name || (q && q.name) || code.toUpperCase(), base: q ? q.price : 10,
     group: state.curGroup === '全部' ? '默认' : state.curGroup });
-  saveWatch(); renderTable();
+  saveWatch(); renderTable(); sigSchedule();
   return true;
 }
 function addStock(hint){
@@ -1788,6 +1817,7 @@ function removeStock(code){
   state.list.splice(idx, 1);
   state.quotes.delete(code); state.samples.delete(code);
   delete state.minuteCache[code]; delete state.klineCache[code];
+  state.sigHist.delete(code); state.sigMap.delete(code);
   const row = rowMap.get(code); if(row){ row.tr.remove(); rowMap.delete(code); }
   if(state.selected === code) state.selected = state.list.length ? state.list[Math.max(0, idx - 1)].code : null;
   saveWatch(); renderTable(); renderChartHeader(); ensureChartData(); drawChart();
@@ -1958,6 +1988,238 @@ function startGroupPopNew(){
   inp.addEventListener('blur', () => finish(true));
 }
 
+/* ================= 通达信公式信号（一柱擎天 / 再次启动 / 双突破） ================= */
+const SIG_DEFS = {
+  vol:{ tag:'擎', name:'一柱擎天', color:'#f0b90b',
+    rule:'成交量创120日新高 且 收盘/开盘>1.049；距上次信号>80个交易日（首次出现也触发）' },
+  ma:{ tag:'启', name:'再次启动', color:'#22c55e',
+    rule:'MA5/MA10/MA20同步上行 且 收盘上穿MA60（昨收仍在60日线下）；13日内≥2次，流通盘<9亿股' },
+  brk:{ tag:'破', name:'双突破', color:'#4f9cf7',
+    rule:'收盘上穿最近摆动高点压力位 且 成本COST(80)<现价（80%筹码处于获利状态）' }
+};
+const SIG_HIST_BARS = 400;   // 日K回溯根数（前复权）
+const SIG_SHOW_WINDOW = 6;   // 自选行徽标仅展示最近N根K线内的信号
+
+/* ---- 通达信函数等价实现 ---- */
+function tdxMA(a, n){
+  const out = new Array(a.length); let s = 0;
+  for(let i = 0; i < a.length; i++){
+    s += a[i];
+    if(i >= n) s -= a[i - n];
+    out[i] = s / Math.min(n, i + 1);
+  }
+  return out;
+}
+function tdxHHV(a, n){
+  const out = new Array(a.length);
+  for(let i = 0; i < a.length; i++){
+    let mx = -Infinity;
+    for(let j = Math.max(0, i - n + 1); j <= i; j++) if(a[j] > mx) mx = a[j];
+    out[i] = mx;
+  }
+  return out;
+}
+function tdxFILTER(cond, n){
+  /* FILTER(X,N)：X满足后，将其后N周期内的信号滤除（与通达信一致） */
+  const out = new Array(cond.length).fill(false);
+  let skip = -1;
+  for(let i = 0; i < cond.length; i++){
+    if(i <= skip) continue;
+    if(cond[i]){ out[i] = true; skip = i + n; }
+  }
+  return out;
+}
+function tdxBACKSET(cond, n){
+  const out = new Array(cond.length).fill(false);
+  for(let i = 0; i < cond.length; i++){
+    if(!cond[i]) continue;
+    for(let j = Math.max(0, i - n + 1); j <= i; j++) out[j] = true;
+  }
+  return out;
+}
+
+/* ---- 筹码分布近似（用于 COST(80)）：首日全量铺开盘区间，之后每日换手衰减旧筹码、新筹码铺当日[low,high] ---- */
+function chipCostSeries(rows, shares){
+  const n = rows.length;
+  let lo = Infinity, hi = -Infinity;
+  for(const r of rows){ if(r.low < lo) lo = r.low; if(r.high > hi) hi = r.high; }
+  const B = 240, width = (hi - lo) / B || 1;
+  const chips = new Float64Array(B);
+  const out = new Array(n);
+  for(let i = 0; i < n; i++){
+    const r = rows[i];
+    const to = shares > 0 && r.vol > 0 ? Math.min(1, r.vol * 100 / shares) : 0.03;
+    if(i > 0){
+      const keep = 1 - to;
+      for(let b = 0; b < B; b++) chips[b] *= keep;
+    }
+    const a = Math.max(0, Math.min(B - 1, Math.floor((r.low - lo) / width)));
+    const b2 = Math.max(0, Math.min(B - 1, Math.floor((r.high - lo) / width)));
+    const cnt = b2 - a + 1, add = (i === 0 ? 1 : to) / cnt;
+    for(let b = a; b <= b2; b++) chips[b] += add;
+    let acc = 0, idx = B - 1;
+    for(let b = 0; b < B; b++){ acc += chips[b]; if(acc >= 0.8){ idx = b; break; } }
+    out[i] = lo + (idx + 0.5) * width;
+  }
+  return out;
+}
+
+/* ---- 三个公式求值：返回 { lastDate, byDate, recent, stamp, intraday } ---- */
+function sigCompute(rows, shares, intraday){
+  const n = rows.length;
+  if(n < 65) return null;
+  const C = new Array(n), O = new Array(n), V = new Array(n);
+  for(let i = 0; i < n; i++){ const r = rows[i]; C[i] = r.close; O[i] = r.open; V[i] = r.vol; }
+  const marks = new Array(n);
+
+  /* 一柱擎天：A1:=V=HHV(V,120); A2:=C/OPEN>1.049; TJ:=A1 AND A2; TJ AND (REF(BARSLAST(TJ),1)>80 OR BARSSINCE(TJ)=0) */
+  const hhvV = tdxHHV(V, 120);
+  let prevTJ = -1;
+  for(let i = 0; i < n; i++){
+    if(!(V[i] > 0) || V[i] !== hhvV[i] || !(O[i] > 0) || !(C[i] / O[i] > 1.049)) continue;
+    if(prevTJ === -1 || i - prevTJ > 81) (marks[i] = marks[i] || []).push('vol');
+    prevTJ = i;
+  }
+
+  /* 再次启动：QDAD 条件 + COUNT(QDAD,13)>=2 + CAPITAL/100<90000（流通盘<9亿股） */
+  const ma5 = tdxMA(C, 5), ma10 = tdxMA(C, 10), ma20 = tdxMA(C, 20), ma60 = tdxMA(C, 60);
+  const qdad = new Array(n).fill(false);
+  for(let i = 1; i < n; i++){
+    qdad[i] = ma5[i] > ma5[i-1] && ma10[i] > ma10[i-1] && ma20[i] > ma20[i-1] &&
+      C[i] > ma60[i] && C[i-1] < ma60[i-1];
+  }
+  if(!(shares > 0) || shares < 9e8){
+    let cnt = 0;
+    for(let i = 0; i < n; i++){
+      if(qdad[i]) cnt++;
+      if(i >= 13 && qdad[i-13]) cnt--;
+      if(qdad[i] && cnt >= 2) (marks[i] = marks[i] || []).push('ma');
+    }
+  }
+
+  /* 双突破：摆动高点压力位（HDY）+ CROSS(C,压力位) + COST(80)<CLOSE */
+  const ay1 = new Array(n).fill(false);
+  for(let i = 10; i < n; i++){
+    let mx = -Infinity;
+    for(let j = Math.max(0, i - 20); j <= i; j++) if(C[j] > mx) mx = C[j];
+    ay1[i] = C[i-10] === mx;
+  }
+  const hdy = tdxFILTER(tdxBACKSET(tdxFILTER(ay1, 10), 11), 10);
+  const cost80 = chipCostSeries(rows, shares);
+  let lastHDY = -1;
+  for(let i = 1; i < n; i++){
+    if(hdy[i]) lastHDY = i;
+    if(lastHDY < 0) continue;
+    const pressure = C[lastHDY];   // 压力位:=REF(C,BARSLAST(HDY))
+    if(C[i] > pressure && C[i-1] <= pressure && cost80[i] < C[i]){
+      (marks[i] = marks[i] || []).push('brk');
+    }
+  }
+
+  const byDate = {}, recent = [];
+  for(let i = 0; i < n; i++){
+    if(!marks[i]) continue;
+    byDate[rows[i].date] = marks[i];
+    if(i >= n - SIG_SHOW_WINDOW) recent.push({ date: rows[i].date, keys: marks[i], today: i === n - 1 });
+  }
+  recent.reverse();
+  const lastDate = rows[n-1].date;
+  const stamp = lastDate + '|' + recent.map(x => x.date + x.keys.join('')).join(',') + (intraday ? '|i' : '');
+  return { lastDate, byDate, recent, stamp, intraday };
+}
+
+/* ---- 拉取/调度（每次最多3个并发，10分钟内不重复拉取） ---- */
+const sigQueue = [];
+const sigInflight = new Map();
+let sigActive = 0;
+
+function sigIntraday(){
+  const d = new Date(), day = d.getDay(), m = d.getHours() * 60 + d.getMinutes();
+  return day >= 1 && day <= 5 && ((m >= 555 && m <= 690) || (m >= 780 && m <= 900));
+}
+async function sigFetchHist(code){
+  const varName = '__sg_' + Math.random().toString(36).slice(2);
+  try{
+    await loadScript('https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=' + varName +
+      '&param=' + code + ',day,,,' + SIG_HIST_BARS + ',qfq&r=' + Math.random(), null, 10000);
+    const raw = window[varName];
+    if(!raw || !raw.data || !raw.data[code]) throw new Error('no data');
+    const node = raw.data[code];
+    const arr = node.qfqday || node.day || [];
+    const rows = [];
+    for(const r of arr){
+      if(!Array.isArray(r) || r.length < 6) continue;
+      rows.push({ date:String(r[0]), open:+r[1], close:+r[2], high:+r[3], low:+r[4], vol:+r[5] });
+    }
+    if(rows.length < 20) throw new Error('empty');
+    return rows;
+  }finally{
+    try{ delete window[varName]; }catch(e){}
+  }
+}
+function sigPump(){
+  while(sigActive < 3 && sigQueue.length){
+    const job = sigQueue.shift();
+    sigActive++;
+    sigFetchHist(job.code).then(rows => {
+      const q = state.quotes.get(job.code);
+      const shares = (q && q.floatMcap > 0 && q.price > 0) ? q.floatMcap * 1e8 / q.price : 0;
+      const res = sigCompute(rows, shares, sigIntraday());
+      state.sigHist.set(job.code, { ts: Date.now() });
+      if(res) state.sigMap.set(job.code, res);
+      sigRefreshViews(job.code);
+      job.resolve(res);
+    }).catch(err => {
+      state.sigHist.set(job.code, { ts: Date.now(), failed: true });
+      job.reject(err);
+    }).then(() => { sigActive--; sigPump(); });
+  }
+}
+function sigEnsure(code){
+  const h = state.sigHist.get(code);
+  if(h && Date.now() - h.ts < 600000) return Promise.resolve(state.sigMap.get(code) || null);
+  const inf = sigInflight.get(code);
+  if(inf) return inf;
+  const p = new Promise((resolve, reject) => { sigQueue.push({ code, resolve, reject }); sigPump(); });
+  sigInflight.set(code, p);
+  p.catch(() => {}).then(() => sigInflight.delete(code));
+  return p;
+}
+function sigSchedule(){
+  for(const it of state.list){
+    const q = state.quotes.get(it.code);
+    if(q && !q.sim) sigEnsure(it.code).catch(() => {});
+  }
+}
+function sigLookup(code){
+  const s = state.sigMap.get(code);
+  return s ? s.byDate : null;
+}
+function sigRefreshViews(code){
+  const row = rowMap.get(code);
+  if(row){
+    const item = state.list.find(x => x.code === code);
+    if(item) updateRow(row, item);
+  }
+  if(state.selected === code && state.chartType === 'day') drawChart();
+}
+function renderRowSigs(row, code){
+  const s = state.sigMap.get(code);
+  const key = s ? s.stamp : '';
+  if(row.sigKey === key) return;
+  row.sigKey = key;
+  if(!s || !s.recent.length){ row.sigs.innerHTML = ''; return; }
+  let h = '';
+  for(const o of s.recent){
+    for(const k of o.keys){
+      const def = SIG_DEFS[k];
+      const tt = def.name + ' · ' + o.date + (o.today && s.intraday ? '（盘中，随成交变化）' : '') + '\n' + def.rule;
+      h += '<span class="sig ' + k + (o.today ? '' : ' old') + '" title="' + escHtml(tt) + '">' + def.tag + '</span>';
+    }
+  }
+  row.sigs.innerHTML = h;
+}
+
 /* ================= 选择 & 数据调度 ================= */
 function setChartTab(type){
   state.chartType = type;
@@ -2022,6 +2284,7 @@ async function tick(){
   }
   state.busy = false;
   renderTable(); renderChartHeader(); recordSamples(); checkAlerts(); drawChart();
+  sigSchedule();
   if(state.mode === 'live' && state.selected && state.chartType !== 'screen'){
     const m = state.minuteCache[state.selected];
     if(!m || Date.now() - m.ts > 60000) loadMinute(state.selected);
