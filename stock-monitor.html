@@ -163,6 +163,12 @@ button.mini{padding:3px 9px;font-size:12px}
 .ap-grid input{width:100%}
 .ap-status{font-size:11.5px;color:var(--muted);margin:9px 0 0;min-height:16px}
 .ap-btns{display:flex;gap:6px;margin-top:10px;align-items:center}
+/* ---------- 云同步浮层 ---------- */
+#syncPop{position:fixed;z-index:80;display:none;width:300px;background:#182130;border:1px solid #2c3a4d;border-radius:11px;
+  padding:12px;box-shadow:0 16px 40px rgba(0,0,0,.55)}
+.sync-field{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--muted)}
+.sync-field input{width:100%}
+.sync-hint{font-size:10.5px;color:#6b7a8d;line-height:1.5;margin-top:8px;background:#131a23;border:1px solid #22303f;border-radius:6px;padding:6px 8px}
 /* ---------- toast ---------- */
 #toasts{position:fixed;right:16px;top:60px;z-index:90;display:flex;flex-direction:column;gap:8px;max-width:340px}
 .toast{background:#1b2431;border:1px solid #334154;border-left:3px solid var(--warn);padding:9px 12px;border-radius:9px;
@@ -226,6 +232,7 @@ button.mini{padding:3px 9px;font-size:12px}
   <button id="btnPause">⏸ 暂停</button>
   <button id="btnSound" class="on">🔊 声音</button>
   <button id="btnNotify">🔔 通知</button>
+  <button id="btnSync">☁ 同步</button>
   <div class="add-wrap">
     <div class="add-search">
       <input id="addInput" placeholder="代码、名称或首字母：gzmt" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="stockSuggest">
@@ -312,6 +319,7 @@ button.mini{padding:3px 9px;font-size:12px}
         <span class="sg-desc" id="screenDesc">趋势·量能·动量·风险综合评分</span>
       </div>
       <div class="sg-status" id="screenStatus">点「开始扫描」从全市场（约 5000 只）筛选，预计 15~30 秒；技术分析基于日K数据，仅供研究参考</div>
+      <div class="sg-boards" id="screenBoards"></div>
       <div class="sg-list" id="screenList"></div>
     </div>
     <div class="screen-wrap" id="auctionWrap">
@@ -319,7 +327,7 @@ button.mini{padding:3px 9px;font-size:12px}
         <button id="btnAuctionWatch" class="primary">⦿ 开始监测</button>
         <button id="btnAuctionSnap">竞价快照</button>
         <button id="btnAuctionAuto" class="on">自动</button>
-        <span class="sg-desc">9:20-9:25 不可撤单期监测真实买盘 · 9:25 摄合后按竞价强度出榜 · 同板块多股共振置顶</span>
+        <span class="sg-desc">9:20-9:25 不可撤单期监测真实买盘 · 9:25 撮合后按竞价强度出榜 · 同板块多股共振置顶 · 仅主板 · 高开2%~5% · 近半月有涨停</span>
       </div>
       <div class="sg-status" id="auctionStatus">--</div>
       <div class="sg-boards" id="auctionBoards"></div>
@@ -356,6 +364,21 @@ button.mini{padding:3px 9px;font-size:12px}
     <span class="spacer"></span>
     <button class="mini" id="apCancel">取消</button>
     <button class="mini primary" id="apSave">保存</button>
+  </div>
+</div>
+<div id="syncPop">
+  <div class="ap-title">自选云同步（按 ID）</div>
+  <label class="sync-field">同步 ID
+    <input id="syncId" placeholder="如：zhangsan-8241" autocomplete="off" spellcheck="false" maxlength="64">
+  </label>
+  <div class="sync-hint">不同 ID = 各自独立的数据：换电脑或换人，输入自己的 ID 点「连接」即可恢复自选。建议 ID 加一段只有你知道的后缀，避免被他人猜到并覆盖。</div>
+  <div class="ap-status" id="syncStatus">--</div>
+  <div class="ap-btns">
+    <button class="mini" id="syncOff" style="display:none">关闭同步</button>
+    <span class="spacer"></span>
+    <button class="mini" id="syncPullBtn">↓ 下载云端</button>
+    <button class="mini" id="syncPushBtn">↑ 上传本机</button>
+    <button class="mini primary" id="syncSaveBtn">连接</button>
   </div>
 </div>
 <div id="grpPop">
@@ -396,13 +419,14 @@ const state = {
   minuteCache:{}, klineCache:{}, samples:new Map(),
   loading:{ minute:null, kline:null },
   warnedMinute:false, warnedKline:false, warnedSim:false,
-  screen:{ features:[], strategy:'mix', poolSize:0, ts:0 },
+  screen:{ features:[], strategy:'mix', poolSize:0, ts:0, resonant:null },
   screening:false, emHost:null,
   auction:{ samples:new Map(), running:false, timer:null, final:null, finalAt:0, est:null, auto:true,
     boards:null, concepts:null, liveResonant:null },
   mkt:{ idx:null, idxAt:0, daily:null, dailyAt:0, hist:null, flow:null, flowKind:'ind', flowSort:'amt', flowSpan:'day', loading:false },
   groups:['默认'], curGroup:'全部',
-  sigHist:new Map(), sigMap:new Map()
+  sigHist:new Map(), sigMap:new Map(),
+  sync:{ id:'', on:false, ts:0, at:0, busy:false, dirty:false, applying:false, timer:null }
 };
 const rowMap = new Map();
 let timer = null;
@@ -426,15 +450,18 @@ function loadState(){
       if(c.flowSort === 'amt' || c.flowSort === 'pct') state.mkt.flowSort = c.flowSort;
       if(c.flowSpan === 'day' || c.flowSpan === 'week') state.mkt.flowSpan = c.flowSpan;
       if(c.curGroup && (c.curGroup === '全部' || state.groups.includes(c.curGroup))) state.curGroup = c.curGroup;
+      if(typeof c.syncId === 'string') state.sync.id = c.syncId.slice(0, 64);
+      if(typeof c.syncOn === 'boolean') state.sync.on = c.syncOn;
+      if(typeof c.syncTs === 'number' && isFinite(c.syncTs)) state.sync.ts = c.syncTs;
     }
   }catch(e){ state.list = DEFAULTS.map(x=>({...x})); }
   if(!state.list.length) state.list = DEFAULTS.map(x=>({...x}));
   state.list.forEach(it => { if(typeof it.group !== 'string' || !state.groups.includes(it.group)) it.group = '默认'; });
   state.selected = state.list[0].code;
 }
-function saveWatch(){ try{ localStorage.setItem(LS.watch, JSON.stringify(state.list)); }catch(e){} }
-function saveAlerts(){ try{ localStorage.setItem(LS.alerts, JSON.stringify(state.alerts)); }catch(e){} }
-function saveCfg(){ try{ localStorage.setItem(LS.cfg, JSON.stringify({intervalMs:state.intervalMs, sound:state.sound, autoAuction:state.auction.auto, flowKind:state.mkt.flowKind, flowSort:state.mkt.flowSort, flowSpan:state.mkt.flowSpan, curGroup:state.curGroup})); }catch(e){} }
+function saveWatch(){ try{ localStorage.setItem(LS.watch, JSON.stringify(state.list)); }catch(e){} syncPushSoon(); }
+function saveAlerts(){ try{ localStorage.setItem(LS.alerts, JSON.stringify(state.alerts)); }catch(e){} syncPushSoon(); }
+function saveCfg(){ try{ localStorage.setItem(LS.cfg, JSON.stringify({intervalMs:state.intervalMs, sound:state.sound, autoAuction:state.auction.auto, flowKind:state.mkt.flowKind, flowSort:state.mkt.flowSort, flowSpan:state.mkt.flowSpan, curGroup:state.curGroup, syncId:state.sync.id, syncOn:state.sync.on, syncTs:state.sync.ts})); }catch(e){} }
 
 /* ================= 数据加载（JSONP） ================= */
 function loadScript(url, charset, timeout){
@@ -1085,7 +1112,8 @@ function analyzeStock(it, rows, code){
   const f = {
     code, name: String(it.f14 || code), price: it.f2, changePct: it.f3,
     close: last.close, ma5, ma10, ma20, vr, bull, golden, rsi, chg1, chg5, chg20,
-    drawdown, bias, yang, turnover: it.f8 || 0, score: 0, tags: []
+    drawdown, bias, yang, turnover: it.f8 || 0, score: 0, tags: [],
+    board: String(it.f100 || '').trim()
   };
   let score = 0; const tags = [];
   if(last.close > ma20){ score += 12; tags.push('站上MA20'); }
@@ -1124,9 +1152,25 @@ async function poolMap(items, worker, limit){
 
 function setScreenStatus(t){ $('#screenStatus').textContent = t; }
 
+/* 命中股板块共振榜 chips（自选/竞价同款样式） */
+function renderScreenBoards(resonant){
+  const el = $('#screenBoards');
+  let html = '';
+  if(resonant && resonant.length){
+    const bs = state.auction.boards || new Map();
+    html = resonant.slice(0, 8).map(([name, n]) => {
+      const pct = bs.get(name);
+      return '<span class="bd-chip rn" title="该板块内 ' + n + ' 只命中股共振">' + escHtml(name) + ' ×' + n + (pct != null ? ' ' + fmtPct(pct) : '') + '</span>';
+    }).join('');
+  }
+  el.innerHTML = html;
+  el.style.display = html ? 'flex' : 'none';
+}
+
 function renderScreen(){
   const wrap = $('#screenList');
   const s = state.screen;
+  renderScreenBoards(s.features.length ? s.resonant : null);
   if(!s.features.length){
     wrap.innerHTML = state.screening
       ? '<div class="sg-empty">正在扫描全市场行情与日K数据…</div>'
@@ -1135,18 +1179,19 @@ function renderScreen(){
   }
   const st = curStrategy();
   const hitAll = s.features.filter(st.pass);
-  const list = hitAll.slice().sort(st.sort).slice(0, 30);
+  const list = hitAll.slice().sort((a, b) => (b.resonance || 0) - (a.resonance || 0) || st.sort(a, b)).slice(0, 30);
+  const resN = (s.resonant || []).length;
   if(!list.length){
     wrap.innerHTML = '<div class="sg-empty">当前策略「' + st.name + '」无符合条件的股票<br><span class="muted">可切换其他策略或稍后重新扫描</span></div>';
     return;
   }
-  wrap.innerHTML = '<div class="sg-head"><span>本轮分析 ' + s.features.length + ' 只 · 命中 ' + hitAll.length + ' 只</span><span>点击任意行查看日K</span></div>' +
+  wrap.innerHTML = '<div class="sg-head"><span>本轮分析 ' + s.features.length + ' 只 · 命中 ' + hitAll.length + ' 只' + (resN ? ' · ' + resN + ' 板块共振' : '') + '</span><span>' + (resN ? '共振板块置顶' : '点击任意行查看日K') + '</span></div>' +
     list.map(f => {
       const cls = signCls(f.changePct);
       const sc = f.score >= 80 ? 'hot' : f.score >= 65 ? 'warm' : '';
       return '<div class="sg-row" data-code="' + f.code + '">' +
         '<div class="sg-info"><div class="sg-t1"><span class="nm">' + escHtml(f.name) + '</span><span class="cd">' + f.code.toUpperCase() + '</span></div>' +
-        '<div class="sg-tags">' + f.tags.map(t => '<span class="tag">' + escHtml(t) + '</span>').join('') + '</div></div>' +
+        '<div class="sg-tags">' + f.tags.map(t => '<span class="tag' + (t.indexOf('共振') >= 0 || t.indexOf('热门行业') >= 0 ? ' hot' : '') + '">' + escHtml(t) + '</span>').join('') + '</div></div>' +
         '<div class="sg-quote"><div class="' + cls + '">' + fmt2(f.price) + '</div><div class="' + cls + '">' + fmtPct(f.changePct) + '</div></div>' +
         '<div class="sg-score ' + sc + '">' + f.score + '<span>分</span></div>' +
         '<button class="mini sg-add" title="加入自选">+ 自选</button></div>';
@@ -1185,6 +1230,8 @@ async function runScreen(){
     }, 4);
     state.screen.features = feats.filter(Boolean);
     state.screen.ts = Date.now();
+    await refreshBoards();   // 行业热度榜（失败不阻塞）
+    state.screen.resonant = applyResonance(state.screen.features.filter(curStrategy().pass), state.auction.boards);
     const st = curStrategy();
     const hit = state.screen.features.filter(st.pass).length;
     setScreenStatus('扫描完成：候选池 ' + pool.size + ' 只，分析 ' + state.screen.features.length + ' 只，策略「' + st.name + '」命中 ' + hit + ' 只' +
@@ -1203,7 +1250,7 @@ function addAllScreened(){
   const s = state.screen;
   if(!s.features.length){ toast('请先执行扫描', 'err'); return; }
   const st = curStrategy();
-  const list = s.features.filter(st.pass).sort(st.sort).slice(0, 10);
+  const list = s.features.filter(st.pass).sort((a, b) => (b.resonance || 0) - (a.resonance || 0) || st.sort(a, b)).slice(0, 10);
   if(!list.length){ toast('当前策略无命中股票', 'err'); return; }
   let n = 0;
   for(const f of list){ if(pushToWatchlist(f.code, f.name)) n++; }
@@ -1244,15 +1291,60 @@ function liftOf(s){
   return (last / first - 1) * 100;
 }
 
-/* 过滤：非ST/新股、价>2、市值≥30亿、高开0.5%~11% */
+/* 仅主板（涨跌幅 10%）：沪 60x / 深 00x；排除科创板 688、创业板 30x 等涨幅上限更高的品种 */
+function auMainBoard(it){
+  const c6 = String(it.f12 || '');
+  return it.f13 === 1 ? /^60/.test(c6) : it.f13 === 0 ? /^00/.test(c6) : false;
+}
+
+/* 近半月（最近 10 个交易日）是否涨停收盘：主板约 10%（低价舍入至 9.8%+），收盘≈最高视为封板 */
+function recentLimitUp(rows){
+  if(!Array.isArray(rows) || rows.length < 2) return false;
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  const today = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  const hist = rows[rows.length - 1].date === today ? rows.slice(0, -1) : rows;
+  for(let i = Math.max(1, hist.length - 10); i < hist.length; i++){
+    if(hist[i].close / hist[i - 1].close >= 1.0975 && hist[i].high <= hist[i].close * 1.001) return true;
+  }
+  return false;
+}
+/* 涨停判定缓存：code → { hit, ts }；未就绪返回 null 并异步补拉（fetchKlineRaw 自带 10 分钟缓存） */
+const AU_LU_TTL = 600000;
+const auLU = new Map();
+const auLUPending = new Map();
+function auLUVerdict(code){
+  const r = auLU.get(code);
+  return r && Date.now() - r.ts < AU_LU_TTL ? r.hit : null;
+}
+function auKickLU(code){
+  if(auLUVerdict(code) !== null) return Promise.resolve();
+  const p = auLUPending.get(code);
+  if(p) return p;
+  const pr = fetchKlineRaw(code).then(rows => {
+    const ok = Array.isArray(rows) && rows.length;
+    auLU.set(code, { hit: ok ? recentLimitUp(rows) : false, ts: ok ? Date.now() : Date.now() - (AU_LU_TTL - 60000) });
+  }).catch(() => {
+    auLU.set(code, { hit: false, ts: Date.now() - (AU_LU_TTL - 60000) });
+  }).then(() => { auLUPending.delete(code); });
+  auLUPending.set(code, pr);
+  return pr;
+}
+/* 出榜前预取涨停判定，保证筛选结果完整 */
+async function auPrecheckLU(items){
+  const codes = items.map(it => (it.f13 === 1 ? 'sh' : 'sz') + String(it.f12));
+  await poolMap(codes, code => auKickLU(code), 6);
+}
+
+/* 过滤：非ST/新股、主板、价>2、市值≥30亿、高开2%~5%；近半月涨停判定在特征层另行过滤 */
 function auRough(it){
   if(/ST|退|^N|^C/.test(String(it.f14 || ''))) return false;
+  if(!auMainBoard(it)) return false;
   if(!(auNum(it.f2) > 2)) return false;
   if(!(auNum(it.f20) >= 3e9)) return false;
   const pre = auNum(it.f18), open = auNum(it.f17) || auNum(it.f2);
   if(!(pre > 0 && open > 0)) return false;
   const pct = (open / pre - 1) * 100;
-  return pct >= 0.5 && pct < 11;
+  return pct >= 2 && pct <= 5;
 }
 
 /* 竞价强度评分（满分100）：开盘强度30 + 竞价金额25 + 竞价换手15 + 竞价拉升20 + 姑比10 */
@@ -1317,6 +1409,11 @@ function auFeature(it, mode){
 function auFeatures(arr, mode){
   const features = arr.filter(auRough)
     .map(it => auFeature(it, mode))
+    .filter(f => {
+      const v = auLUVerdict(f.code);        // 只保留近半月有涨停的
+      if(v === null){ auKickLU(f.code); return false; }  // 判定未就绪：先不入选，就绪后自动补上
+      return v === true;
+    })
     .sort((a, b) => b.score - a.score)
     .slice(0, 40);
   return { features, resonant: auApplyResonance(features) };
@@ -1331,15 +1428,15 @@ async function refreshBoards(){
   }catch(e){}
 }
 
-/* 板块共振：同板块 ≥2 只强势股 → 加分并聚拢排序；行业榜热度加成 */
-function auApplyResonance(features){
+/* 板块共振（竞价 / 智能选股共用）：同板块 ≥2 只强势股 → 加分并聚拢排序；行业榜热度加成 */
+function applyResonance(features, boardsMap){
   const g = new Map();
   for(const f of features){
     if(!f.board) continue;
     if(!g.has(f.board)) g.set(f.board, []);
     g.get(f.board).push(f);
   }
-  const bs = state.auction.boards;
+  const bs = boardsMap;
   const resonant = [];
   for(const [board, arr] of g){
     if(arr.length < 2) continue;
@@ -1378,10 +1475,12 @@ function auApplyResonance(features){
   });
   return resonant;
 }
+/* 竞价侧入口：固定使用竞价行业榜 */
+function auApplyResonance(features){ return applyResonance(features, state.auction.boards); }
 
 /* 采样：涨幅榜 + 量榜，记录匹配价时间序列 */
 async function auctionSample(){
-  const [hot, vol] = await Promise.all([emRank('f3', 120), emRank('f5', 80)]);
+  const [hot, vol] = await Promise.all([emRank('f3', 200), emRank('f5', 100)]);
   const map = new Map();
   for(const it of hot.concat(vol)){
     if(!it || it.f12 === undefined) continue;
@@ -1442,12 +1541,13 @@ async function auctionSnap(){
   if(ph === 'matched'){
     setAuctionStatus('竞价已摫合，正在获取开盘价与竞价量额…');
     try{
-      const [[amtTop, hot]] = await Promise.all([Promise.all([emRank('f6', 120), emRank('f3', 80)]), refreshBoards()]);
+      const [[amtTop, hot]] = await Promise.all([Promise.all([emRank('f6', 150), emRank('f3', 150)]), refreshBoards()]);
       const map = new Map();
       for(const it of amtTop.concat(hot)){
         if(!it || it.f12 === undefined) continue;
         map.set(String(it.f12), it);
       }
+      await auPrecheckLU([...map.values()].filter(auRough));   // 预取近半月涨停判定
       au.final = auFeatures([...map.values()], 'final');
       au.finalAt = Date.now();
       toast('竞价强势榜已生成：' + au.final.features.length + ' 只（' + nowTime() + '）', 'ok');
@@ -1460,7 +1560,8 @@ async function auctionSnap(){
   }else{
     setAuctionStatus('非竞价窗口，按开盘表现估算（竞价量额仅 9:25-9:30 可取）…');
     try{
-      const [hot] = await Promise.all([emRank('f3', 120), refreshBoards()]);
+      const [hot] = await Promise.all([emRank('f3', 150), refreshBoards()]);
+      await auPrecheckLU(hot.filter(auRough));                 // 预取近半月涨停判定
       au.est = Object.assign(auFeatures(hot, 'est'), { ts: Date.now() });
     }catch(e){
       setAuctionStatus('获取数据失败：' + e.message + '（可重试）');
@@ -1475,10 +1576,14 @@ function auLiveFeatures(){
   const out = [];
   for(const [code, s] of state.auction.samples){
     if(!(s.cap >= 3e9)) continue;
+    if(!/^(sh60|sz00)/.test(code)) continue;   // 仅主板
     const last = s.s[s.s.length - 1];
     if(!last) continue;
     const openPct = (last.p / s.pre - 1) * 100;
-    if(!(openPct >= 0.5 && openPct < 11)) continue;
+    if(!(openPct >= 2 && openPct <= 5)) continue;
+    const lv = auLUVerdict(code);
+    if(lv === null){ auKickLU(code); continue; }   // 涨停判定未就绪：先不显示
+    if(!lv) continue;                              // 只保留近半月有涨停的
     const amt = last.a > 0 ? last.a : null;
     const f = {
       code, name: s.name, price: last.p, openPct, amt,
@@ -1535,7 +1640,7 @@ function renderAuction(){
     renderAuctionBoards(rn);
     wrap.innerHTML = list.length
       ? head('竞价监测中 · ' + nowTime(), '同板块多股共振置顶 · 点击行看日K') + rows(list)
-      : '<div class="sg-empty">正在采集竞价匹配数据…<br><span class="muted">高开 0.5% 以上且通过基础过滤的股票将出现在这里</span></div>';
+      : '<div class="sg-empty">正在采集竞价匹配数据…<br><span class="muted">仅主板、高开 2%~5% 且近半月有涨停的股票将出现在这里</span></div>';
     return;
   }
   if(au.final && sameDay(au.finalAt)){
@@ -1558,6 +1663,7 @@ function renderAuction(){
   wrap.innerHTML = '<div class="sg-empty">' + (AU_PHASE_TXT[ph] || '') + '<br>' +
     '「开始监测」9:15-9:25 采集匹配价走势，9:20 后挂单不可撤，拉升与放量即真实买盘<br>' +
     '「竞价快照」9:25 后按开盘价 + 竞价量额生成竞价强势榜，同板块多股共振置顶<br>' +
+    '<span class="muted">筛选：仅主板（排除科创/创业板）· 高开 2%~5% · 近半月有涨停 · 市值≥30亿</span><br>' +
     '<span class="muted">开启「自动」后，交易日 9:15 起自动监测，9:25 摫合后自动出榜</span></div>';
   if(!au.running) setAuctionStatus(AU_PHASE_TXT[ph] || '');
 }
@@ -1828,7 +1934,7 @@ function removeStock(code){
 const grpPop = $('#grpPop');
 let grpPopCode = null;
 
-function saveGroups(){ try{ localStorage.setItem(LS.groups, JSON.stringify(state.groups)); }catch(e){} }
+function saveGroups(){ try{ localStorage.setItem(LS.groups, JSON.stringify(state.groups)); }catch(e){} syncPushSoon(); }
 function groupCount(name){
   return name === '全部' ? state.list.length : state.list.filter(x => x.group === name).length;
 }
@@ -2773,6 +2879,190 @@ function renderMktBar(){
   }
 }
 
+/* ================= 自选云同步（按 ID：多设备 / 多人各自独立） ================= */
+const SYNC_API = 'https://textdb.dev/api/data/';
+const SYNC_KEY_PREFIX = 'astock-watch-v1-';
+function sanitizeSyncId(v){
+  const s = String(v || '').trim().replace(/\s+/g, ' ');
+  return /^[\w\u4e00-\u9fa5\-_.@ ]{2,64}$/.test(s) ? s : '';
+}
+/* ID → 存储 key：SHA-1 摘要（不含明文 ID），同名 ID 在任何设备得到同一 key */
+async function syncKeyOf(id){
+  const txt = 'astock-sync-v1:' + id.trim().toLowerCase();
+  let hex = '';
+  try{
+    const buf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(txt));
+    hex = [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }catch(e){
+    let h1 = 0x811c9dc5, h2 = 0xc9dc5118;
+    for(let i = 0; i < txt.length; i++){ h1 = (((h1 ^ txt.charCodeAt(i)) >>> 0) * 16777619) >>> 0; }
+    for(let i = txt.length - 1; i >= 0; i--){ h2 = (((h2 ^ txt.charCodeAt(i)) >>> 0) * 16777619) >>> 0; }
+    hex = h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
+  }
+  return SYNC_KEY_PREFIX + hex;
+}
+function syncPayload(){
+  return {
+    v: 1, ts: Date.now(),
+    groups: state.groups,
+    list: state.list.map(it => [it.code, it.name || '', it.group || '默认', it.base || 0]),
+    alerts: state.alerts || {}
+  };
+}
+/* 校验并规整云端数据；非法返回 null（纯函数，便于单测） */
+function syncParse(p){
+  if(!p || p.v !== 1 || !Array.isArray(p.list)) return null;
+  const groups = Array.isArray(p.groups)
+    ? p.groups.filter(x => typeof x === 'string' && x.trim()).map(x => x.trim()).slice(0, 20) : [];
+  if(!groups.includes('默认')) groups.unshift('默认');
+  const list = p.list.map(row => {
+    if(!Array.isArray(row)) return null;
+    const code = normalizeCode(row[0]);
+    if(!code) return null;
+    const grp = typeof row[2] === 'string' && row[2].trim() ? row[2].trim().slice(0, 20) : '默认';
+    if(!groups.includes(grp)) groups.push(grp);
+    return { code, name: String(row[1] || '').trim() || code.toUpperCase(), group: grp, base: +row[3] || 10 };
+  }).filter(Boolean);
+  if(!list.length) return null;
+  const alerts = (p.alerts && typeof p.alerts === 'object' && !Array.isArray(p.alerts)) ? p.alerts : {};
+  return { groups, list, alerts, ts: +p.ts || 0 };
+}
+function syncApply(parsed){
+  state.sync.applying = true;
+  try{
+    state.groups = parsed.groups;
+    state.list = parsed.list;
+    state.alerts = parsed.alerts;
+    state.quotes.clear(); state.samples.clear();
+    if(state.curGroup !== '全部' && !state.groups.includes(state.curGroup)) state.curGroup = '全部';
+    if(!state.list.some(x => x.code === state.selected)) state.selected = state.list[0].code;
+    saveWatch(); saveGroups(); saveAlerts();
+    renderTable(); renderChartHeader(); ensureChartData(); drawChart(); sigSchedule();
+  }finally{
+    state.sync.applying = false;
+  }
+}
+function renderSyncStatus(msg){
+  const el = $('#syncStatus');
+  if(!el) return;
+  if(msg){ el.textContent = msg; return; }
+  if(!state.sync.on || !state.sync.id){
+    el.textContent = '未开启：填写 ID 后点「连接」，多台设备/多人各自独立保存';
+    return;
+  }
+  el.textContent = '已连接「' + state.sync.id + '」· 本机 ' + state.list.length + ' 只自选' +
+    (state.sync.at ? ' · 上次同步 ' + new Date(state.sync.at).toTimeString().slice(0, 8) : '') +
+    (state.sync.busy ? ' · 同步中…' : state.sync.dirty ? ' · 待上传…' : '');
+}
+async function syncPull(manual){
+  if(!state.sync.on || !state.sync.id){ if(manual) toast('请先填写同步 ID 并点「连接」', 'err'); return 'none'; }
+  if(state.sync.busy) return 'busy';
+  if(state.sync.dirty && !manual) return 'dirty';   // 本机有未上传的改动，先不覆盖
+  state.sync.busy = true; renderSyncStatus();
+  try{
+    const res = await fetch(SYNC_API + await syncKeyOf(state.sync.id), { cache:'no-store' });
+    if(res.status === 404) return 'missing';
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const parsed = syncParse(await res.json());
+    if(!parsed) throw new Error('云端数据格式不识别');
+    if(manual || parsed.ts > state.sync.ts){
+      syncApply(parsed);
+      state.sync.ts = parsed.ts || Date.now();
+      state.sync.at = Date.now();
+      saveCfg();
+      toast((manual ? '已从云端恢复' : '检测到云端更新，已自动同步') + '：' + state.list.length + ' 只自选（ID ' + state.sync.id + '）', 'ok');
+      return 'applied';
+    }
+    state.sync.at = Date.now(); saveCfg();
+    if(manual) toast('云端数据与本地一致或更旧，无需恢复', 'ok');
+    return 'same';
+  }catch(e){
+    if(manual) toast('云端读取失败：' + e.message, 'err');
+    return 'error';
+  }finally{
+    state.sync.busy = false; renderSyncStatus();
+  }
+}
+async function syncPush(manual){
+  if(!state.sync.on || !state.sync.id){ if(manual) toast('请先填写同步 ID 并点「连接」', 'err'); return false; }
+  if(state.sync.busy){ if(manual) toast('正在同步中，请稍候', 'err'); return false; }
+  state.sync.busy = true; renderSyncStatus();
+  try{
+    const p = syncPayload();
+    p.ts = Math.max(Date.now(), (state.sync.ts || 0) + 1);
+    const res = await fetch(SYNC_API + await syncKeyOf(state.sync.id), {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(p)
+    });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    state.sync.ts = p.ts; state.sync.at = Date.now(); state.sync.dirty = false;
+    saveCfg();
+    if(manual) toast('已上传 ' + state.list.length + ' 只自选到云端（ID ' + state.sync.id + '）', 'ok');
+    return true;
+  }catch(e){
+    if(manual) toast('云端上传失败：' + e.message, 'err');
+    else setTimeout(() => { if(state.sync.dirty) syncPush(false); }, 30000);   // 自动重试
+    return false;
+  }finally{
+    state.sync.busy = false; renderSyncStatus();
+  }
+}
+/* 自选/分类/预警变动后防抖上传 */
+function syncPushSoon(){
+  if(!state.sync.on || !state.sync.id || state.sync.applying) return;
+  state.sync.dirty = true;
+  clearTimeout(state.sync.timer);
+  state.sync.timer = setTimeout(() => syncPush(false), 3000);
+}
+async function syncConnect(){
+  const id = sanitizeSyncId($('#syncId').value);
+  if(!id){ toast('同步 ID 需 2~64 个字符（中英文/数字/-/_），不含其他符号', 'err'); return; }
+  const switched = id !== state.sync.id;
+  state.sync.id = id; state.sync.on = true;
+  if(switched){ state.sync.ts = 0; state.sync.dirty = false; }
+  saveCfg();
+  $('#syncOff').style.display = '';
+  renderSyncStatus('检查云端数据…');
+  const r = await syncPull(false);
+  if(r === 'missing'){
+    const ok = await syncPush(true);
+    if(ok) toast('云端已为 ID「' + id + '」创建记录（本机当前 ' + state.list.length + ' 只自选）', 'ok');
+  }else if(r === 'applied' || r === 'same'){
+    toast('已连接「' + id + '」', 'ok');
+  }else if(r === 'dirty'){
+    toast('已连接「' + id + '」：本机有改动待上传，稍后自动同步', 'ok');
+  }else if(r === 'none' || r === 'busy'){
+    /* toast 已提示 */
+  }
+}
+function openSyncPop(){
+  const pop = $('#syncPop');
+  $('#syncId').value = state.sync.id || '';
+  $('#syncOff').style.display = state.sync.on ? '' : 'none';
+  renderSyncStatus();
+  pop.style.display = 'block';
+  const r = $('#btnSync').getBoundingClientRect();
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let left = Math.min(r.right - pw, window.innerWidth - pw - 10);
+  let top = r.bottom + 8;
+  if(top + ph > window.innerHeight - 10) top = Math.max(10, r.top - ph - 8);
+  pop.style.left = Math.max(10, left) + 'px';
+  pop.style.top = top + 'px';
+}
+$('#btnSync').addEventListener('click', e => { e.stopPropagation(); openSyncPop(); });
+$('#syncSaveBtn').addEventListener('click', syncConnect);
+$('#syncPushBtn').addEventListener('click', () => syncPush(true));
+$('#syncPullBtn').addEventListener('click', () => syncPull(true));
+$('#syncOff').addEventListener('click', () => {
+  state.sync.on = false; saveCfg(); renderSyncStatus();
+  toast('已关闭云同步（本地数据保留；重新点「连接」可恢复）', 'ok');
+});
+document.addEventListener('click', e => {
+  const pop = $('#syncPop');
+  if(pop.style.display !== 'block') return;
+  if(pop.contains(e.target) || (e.target.closest && e.target.closest('#btnSync'))) return;
+  pop.style.display = 'none';
+});
+
 /* ================= 启动 ================= */
 loadState();
 updateSoundBtn();
@@ -2785,6 +3075,11 @@ drawChart();
 tick();
 mktTick(true);
 initPageVersionWatch();
+if(state.sync.on && state.sync.id) syncPull(false);
+setInterval(() => { if(!document.hidden && state.sync.on && state.sync.id) syncPull(false); }, 300000);
+document.addEventListener('visibilitychange', () => {
+  if(!document.hidden && state.sync.on && state.sync.id && !state.sync.dirty) syncPull(false);
+});
 setInterval(() => { if(!document.hidden) mktTick(); }, 60000);
 setInterval(() => { if(!document.hidden) checkPageVersion(); }, 180000);
 $('#btnAuctionAuto').classList.toggle('on', state.auction.auto);
